@@ -313,8 +313,7 @@ class DatabaseManager:
         except:
             return {"processed": 0, "stickers": 0, "errors": 0}
 
-# Initialize Global DB Instance
-db = DatabaseManager(DB_NAME)
+
 
 # ========================== SETTINGS OPERATIONS ==========================
 
@@ -1605,4 +1604,3 @@ if __name__ == "__main__":
         logger.critical(f"❌ Fatal Error: {e}")
         traceback.print_exc()
 
-        
