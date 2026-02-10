@@ -4,3 +4,4 @@ python-dotenv
 flask
 requests
 pysqlite3-binary
+gunicorn
