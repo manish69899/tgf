@@ -1,6 +1,22 @@
-venv/
-*.session
-*.session-journal
-*.db
-*.log
+
+# --- Security (Ye kabhi upload nahi honge) ---
+.env
+api.py
+config.py
+
+# --- Python Junk (Ye kachra hai, zaroorat nahi) ---
 __pycache__/
+*.pyc
+
+# --- Virtual Environment (Ye bahut heavy hota hai) ---
+venv/
+env/
+.venv/
+
+# --- Logs ---
+*.log
+system.log
+enterprise_bot.db
+
+#myguide 
+myguidesetup.txt

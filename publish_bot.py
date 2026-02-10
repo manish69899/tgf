@@ -35,6 +35,8 @@ import sys
 import traceback
 from typing import List, Optional, Dict, Union, Any, Tuple
 from datetime import datetime
+from keep_alive import keep_alive
+from dotenv import load_dotenv
 
 # Import Pyrogram
 from pyrogram import Client, filters, idle, enums
@@ -55,18 +57,25 @@ from pyrogram.errors import (
     PeerIdInvalid
 )
 
+load_dotenv()
+
 # ==============================================================================
 #                               CONFIGURATION
 # ==============================================================================
 
 # ⚠️ SECURITY WARNING: Replace these with your actual credentials.
 # Get API_ID/HASH from: https://my.telegram.org
-API_ID = 39556336
-API_HASH = "5b8d61ed768f68ebdf403350e64234cc"
-BOT_TOKEN = "8424927329:AAE0lfGNvfiXGjF45hAmkzI6BFO32zP1n84"
+API_ID = int(os.getenv("API_ID", "0")) 
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# The SUPER ADMIN (Can manage other admins)
-SUPER_ADMIN_ID = 8308946154
+# The SUPER ADMIN
+SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "0"))
+
+# Check agar values load nahi hui
+if not API_HASH or not BOT_TOKEN:
+    print("❌ ERROR: .env file missing or empty! Please check configuration.")
+    sys.exit(1)
 
 # Database Configuration
 DB_NAME = "enterprise_bot.db"
@@ -866,6 +875,11 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # --- NEW CODE START (Ye add karna hai) ---
+        keep_alive()  # <--- Ye line Render server ko zinda rakhegi
+        print("🌍 Web Server Started! (Bot is ready for Render)")
+        # --- NEW CODE END ---
+
         # Use existing event loop logic
         loop = asyncio.get_event_loop()
         loop.run_until_complete(main())

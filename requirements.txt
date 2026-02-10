@@ -1,3 +1,4 @@
-pyrogram 
+pyrogram
 tgcrypto
-
+flask
+python-dotenv
