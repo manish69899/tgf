@@ -4,17 +4,15 @@
                        ULTIMATE TELEGRAM PUBLISHER BOT
 ================================================================================
 Author: Senior Python Architect
-Version: 5.1.0 (Enterprise Edition - Render Ready)
+Version: 5.2.0 (Enterprise Edition - Storage Optimized)
 Description: 
     A professional-grade Telegram bot for automating channel publications.
-    Features:
-    - FIFO Queue Management with Persistence
-    - SQLite Database for robust data storage
-    - Multi-Admin System with permissions
-    - Smart Sticker Logic (Raw API - No Crash)
-    - Dynamic Footer/Caption Management
-    - Detailed Statistical Analysis
-    - FloodWait Handling & Smart Retries
+    
+    🔥 NEW ENTERPRISE FEATURES:
+    - 🛡️ Rotating Logs: Prevents storage overflow on Render (Auto-cleans logs).
+    - 📂 Smart Directory: Auto-creates 'downloads' folder for easy cleanup.
+    - ♻️ Resilience: Prepared for Auto-Restore mechanics.
+    - 🚀 FIFO Queue with Priority Injection support.
 
 Requirements:
     pip install pyrogram tgcrypto flask python-dotenv
@@ -26,8 +24,10 @@ Usage:
 
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler # <-- NEW: Auto-deletes old logs
 import sqlite3
 import os
+import shutil # <-- NEW: For deleting folders/files easily
 import time
 import random
 import sys
@@ -38,7 +38,7 @@ from typing import List, Optional, Dict, Union, Any, Tuple
 # --- Third Party Imports ---
 from dotenv import load_dotenv
 from pyrogram import Client, filters, idle, enums
-from pyrogram.raw import functions, types  # For Smart Sticker Logic
+from pyrogram.raw import functions, types
 from pyrogram.types import (
     Message, 
     InlineKeyboardMarkup, 
@@ -67,8 +67,6 @@ load_dotenv()
 # ==============================================================================
 
 # ⚠️ SECURITY WARNING: Replace these with your actual credentials in .env file
-# Get API_ID/HASH from: https://my.telegram.org
-
 try:
     API_ID = int(os.getenv("API_ID", "0")) 
     API_HASH = os.getenv("API_HASH")
@@ -78,38 +76,46 @@ except ValueError:
     print("❌ ERROR: API_ID or SUPER_ADMIN_ID must be integers in .env file.")
     sys.exit(1)
 
-# Critical Check: Agar config missing hai to bot start mat karo
+# Critical Check
 if not API_HASH or not BOT_TOKEN or API_ID == 0:
     print("❌ CRITICAL ERROR: .env file is missing or variables are empty!")
-    print("👉 Please check API_ID, API_HASH, and BOT_TOKEN.")
     sys.exit(1)
 
-# Database Configuration
+# --- 📂 STORAGE MANAGEMENT (Render Free Tier Optimization) ---
 DB_NAME = "enterprise_bot.db"
-
-# Logging Configuration
 LOG_FILE = "system.log"
+DOWNLOAD_PATH = "downloads/" # <-- NEW: Dedicated folder for temp files
 
-# Custom Formatter for Professional Logs
+# Create downloads folder if not exists
+if not os.path.exists(DOWNLOAD_PATH):
+    os.makedirs(DOWNLOAD_PATH)
+
+# --- 📝 LOGGING CONFIGURATION (Space Saver) ---
+# RotatingFileHandler:
+# - maxBytes=5MB: File 5MB se badi nahi hogi.
+# - backupCount=1: Sirf 1 purani file rakhega, baaki delete kar dega.
 logging.basicConfig(
-    format='%(asctime)s - [%(levelname)s] - %(name)s - (Line: %(lineno)d) - %(message)s',
     level=logging.INFO,
+    format='%(asctime)s - [%(levelname)s] - %(name)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=1), 
         logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger("EnterpriseBot")
 
+# Suppress noisy logs from Pyrogram (Clean Console)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+
 
 # ==============================================================================
-#                           DATABASE MANAGER (SQLite)
+#                           DATABASE MANAGER (SQLite - Enterprise)
 # ==============================================================================
 
 class DatabaseManager:
     """
     Handles all interactions with the SQLite database.
-    Ensures data persistence, thread safety, and crash recovery.
+    Features: WAL Mode (High Speed), Smart Defaults, and Thread Safety.
     """
     def __init__(self, db_name: str):
         self.db_name = db_name
@@ -120,25 +126,32 @@ class DatabaseManager:
 
     def connect(self):
         """
-        Establishes a thread-safe connection to the database.
-        Timeout=30 ensures we don't get 'Database Locked' errors easily.
+        Establishes a high-performance connection.
+        Enables Write-Ahead Logging (WAL) for concurrency.
         """
         try:
             self.conn = sqlite3.connect(
                 self.db_name, 
                 check_same_thread=False, 
-                timeout=30.0  # Wait 30s before failing if DB is busy
+                timeout=30.0
             )
+            # Row Factory allows accessing columns by name (More professional)
+            self.conn.row_factory = sqlite3.Row 
             self.cursor = self.conn.cursor()
-            logger.info("💾 Database connection established successfully.")
+            
+            # 🔥 PERFORMANCE HACK: Enable WAL Mode (Faster, No Locking)
+            self.cursor.execute("PRAGMA journal_mode=WAL;")
+            self.cursor.execute("PRAGMA synchronous=NORMAL;")
+            
+            logger.info("💾 Database Connected (WAL Mode Enabled).")
         except sqlite3.Error as e:
             logger.critical(f"❌ Critical Database Connection Failed: {e}")
             sys.exit(1)
 
     def init_tables(self):
-        """Creates necessary tables and sets default values safely."""
+        """Creates necessary tables with NEW Smart Settings."""
         try:
-            # 1. Settings Table (Bot Configuration)
+            # 1. Settings Table
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
@@ -146,7 +159,7 @@ class DatabaseManager:
                 )
             ''')
 
-            # 2. Sticker Sets Table (For Random Stickers)
+            # 2. Sticker Sets (For Random Mode)
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS sticker_sets (
                     set_name TEXT PRIMARY KEY,
@@ -154,7 +167,7 @@ class DatabaseManager:
                 )
             ''')
 
-            # 3. Admins Table (Permission Management)
+            # 3. Admins (For Permission)
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admins (
                     user_id INTEGER PRIMARY KEY,
@@ -163,7 +176,7 @@ class DatabaseManager:
                 )
             ''')
 
-            # 4. Stats Table (Daily Analytics)
+            # 4. Stats (Analytics)
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stats (
                     date DATE PRIMARY KEY,
@@ -173,25 +186,23 @@ class DatabaseManager:
                 )
             ''')
             
-            # 5. Queue Persistence (Optional but Recommended)
-            # Agar bot restart ho, toh queue ka data yahan save ho sakta hai future mein
-            self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS queue_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER,
-                    chat_id INTEGER,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
-            # --- Initialize Default Settings ---
+            # --- 💉 INJECTING NEW SMART DEFAULTS ---
             defaults = {
+                # Basic
                 "target_channel": "0",
-                "delay": "5",          # 30 Seconds default delay
-                "footer": "NONE",       # Footer text
-                "mode": "copy",         # 'copy' (branding) or 'forward' (simple)
-                "is_paused": "0",       # 0 = Running, 1 = Paused
-                "sticker_pack_link": "" # Link for sticker pack
+                "delay": "30",              # Safe delay
+                "footer": "NONE",
+                "mode": "copy",             # copy (No Tag) / forward (With Tag)
+                "is_paused": "0",
+                
+                # 🎭 Advanced Sticker Controls
+                "sticker_state": "ON",      # ON / OFF
+                "sticker_mode": "RANDOM",   # RANDOM / SINGLE
+                "single_sticker_id": "",    # File ID for single mode
+                "sticker_pack_link": "",    # Backup link
+                
+                # 🧹 Smart Features
+                "caption_cleaner": "OFF",   # Removes links/@ from captions
             }
             
             for key, val in defaults.items():
@@ -200,14 +211,14 @@ class DatabaseManager:
                     (key, val)
                 )
             
-            # Ensure Super Admin is always in DB
+            # Ensure Super Admin Access
             self.cursor.execute(
                 "INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)", 
                 (SUPER_ADMIN_ID, 0)
             )
             
             self.conn.commit()
-            logger.info("✅ Database Tables & Defaults Initialized.")
+            logger.info("✅ Database Tables & Smart Settings Ready.")
             
         except sqlite3.Error as e:
             logger.critical(f"❌ Table Initialization Error: {e}")
@@ -216,20 +227,115 @@ class DatabaseManager:
     # ========================== SETTINGS OPERATIONS ==========================
 
     def get_setting(self, key: str, default: str = None) -> str:
+        try:
+            self.cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
+            res = self.cursor.fetchone()
+            return res['value'] if res else default
+        except sqlite3.Error:
+            return default
+
+    def set_setting(self, key: str, value: str):
+        try:
+            self.cursor.execute(
+                "REPLACE INTO settings (key, value) VALUES (?, ?)", 
+                (key, str(value))
+            )
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"⚠️ Setting Save Error: {e}")
+
+    # ========================== STICKER OPERATIONS ==========================
+
+    def add_sticker_pack(self, name: str):
+        self.cursor.execute("INSERT OR IGNORE INTO sticker_sets (set_name) VALUES (?)", (name,))
+        self.conn.commit()
+
+    def remove_sticker_pack(self, name: str):
+        self.cursor.execute("DELETE FROM sticker_sets WHERE set_name=?", (name,))
+        self.conn.commit()
+
+    def get_sticker_packs(self) -> List[str]:
+        self.cursor.execute("SELECT set_name FROM sticker_sets")
+        return [row['set_name'] for row in self.cursor.fetchall()]
+
+    # ========================== ADMIN OPERATIONS ==========================
+
+    def add_admin(self, user_id: int, added_by: int):
+        self.cursor.execute(
+            "INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)", 
+            (user_id, added_by)
+        )
+        self.conn.commit()
+
+    def remove_admin(self, user_id: int):
+        # 🛡️ SECURITY: Prevent removing Super Admin via Code
+        if user_id == SUPER_ADMIN_ID:
+            logger.warning("⚠️ Attempted to remove Super Admin. Blocked.")
+            return 
+        self.cursor.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
+        self.conn.commit()
+
+    def is_admin(self, user_id: int) -> bool:
+        if user_id == SUPER_ADMIN_ID: return True
+        self.cursor.execute("SELECT 1 FROM admins WHERE user_id=?", (user_id,))
+        return self.cursor.fetchone() is not None
+
+    def get_all_admins(self) -> List[int]:
+        self.cursor.execute("SELECT user_id FROM admins")
+        return [row['user_id'] for row in self.cursor.fetchall()]
+
+    # ========================== STATS OPERATIONS ==========================
+
+    def update_stats(self, processed=0, stickers=0, errors=0):
+        try:
+            today = datetime.now().date()
+            self.cursor.execute("""
+                INSERT INTO stats (date, processed, stickers_sent, errors)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    processed = processed + ?,
+                    stickers_sent = stickers_sent + ?,
+                    errors = errors + ?
+            """, (today, processed, stickers, errors, processed, stickers, errors))
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def get_total_stats(self) -> Dict[str, int]:
+        try:
+            self.cursor.execute("SELECT SUM(processed), SUM(stickers_sent), SUM(errors) FROM stats")
+            res = self.cursor.fetchone()
+            return {
+                "processed": res[0] or 0,
+                "stickers": res[1] or 0,
+                "errors": res[2] or 0
+            }
+        except:
+            return {"processed": 0, "stickers": 0, "errors": 0}
+
+# Initialize Global DB Instance
+db = DatabaseManager(DB_NAME)
+
+# ========================== SETTINGS OPERATIONS ==========================
+
+    def get_setting(self, key: str, default: str = None) -> str:
         """
-        Retrieves a setting. Returns 'default' if key not found.
-        Avoids crash if DB is empty.
+        Retrieves a setting safely. 
+        Returns 'default' if key not found or error occurs.
         """
         try:
             self.cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
             res = self.cursor.fetchone()
-            return res[0] if res else default
+            # Handle both Tuple and Row objects safely
+            if res:
+                return res[0] if isinstance(res, tuple) else res['value']
+            return default
         except sqlite3.Error as e:
-            logger.error(f"⚠️ DB Read Error (get_setting): {e}")
+            # logger.error(f"⚠️ DB Read Error (get_setting): {e}")
             return default
 
     def set_setting(self, key: str, value: str):
-        """Updates or Inserts a setting."""
+        """Updates or Inserts a setting immediately."""
         try:
             self.cursor.execute(
                 "REPLACE INTO settings (key, value) VALUES (?, ?)", 
@@ -242,6 +348,7 @@ class DatabaseManager:
     # ========================== STICKER OPERATIONS ==========================
 
     def add_sticker_pack(self, name: str):
+        """Adds a sticker pack link to the rotation list."""
         try:
             self.cursor.execute("INSERT OR IGNORE INTO sticker_sets (set_name) VALUES (?)", (name,))
             self.conn.commit()
@@ -249,6 +356,7 @@ class DatabaseManager:
             pass
 
     def remove_sticker_pack(self, name: str):
+        """Removes a sticker pack from rotation."""
         try:
             self.cursor.execute("DELETE FROM sticker_sets WHERE set_name=?", (name,))
             self.conn.commit()
@@ -259,13 +367,18 @@ class DatabaseManager:
         """Returns a list of all saved sticker pack names/links."""
         try:
             self.cursor.execute("SELECT set_name FROM sticker_sets")
-            return [row[0] for row in self.cursor.fetchall()]
+            rows = self.cursor.fetchall()
+            # Handle both Tuple and Row objects
+            if rows and isinstance(rows[0], tuple):
+                return [row[0] for row in rows]
+            return [row['set_name'] for row in rows]
         except sqlite3.Error:
             return []
 
     # ========================== ADMIN OPERATIONS ==========================
 
     def add_admin(self, user_id: int, added_by: int):
+        """Authorizes a new user as an admin."""
         try:
             self.cursor.execute(
                 "INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)", 
@@ -276,8 +389,10 @@ class DatabaseManager:
             logger.error(f"❌ Add Admin Error: {e}")
 
     def remove_admin(self, user_id: int):
+        """Revokes admin access (Super Admin is protected)."""
         if user_id == SUPER_ADMIN_ID:
-            return # Cannot delete super admin
+            logger.warning("🛡️ Security Alert: Attempt to remove Super Admin blocked.")
+            return 
         try:
             self.cursor.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
             self.conn.commit()
@@ -295,9 +410,13 @@ class DatabaseManager:
             return False
 
     def get_all_admins(self) -> List[int]:
+        """Returns list of all admin IDs."""
         try:
             self.cursor.execute("SELECT user_id FROM admins")
-            return [row[0] for row in self.cursor.fetchall()]
+            rows = self.cursor.fetchall()
+            if rows and isinstance(rows[0], tuple):
+                return [row[0] for row in rows]
+            return [row['user_id'] for row in rows]
         except sqlite3.Error:
             return []
 
@@ -305,8 +424,7 @@ class DatabaseManager:
 
     def update_stats(self, processed=0, stickers=0, errors=0):
         """
-        Updates daily statistics safely.
-        Uses ON CONFLICT to handle "Insert if new, Update if exists".
+        Updates daily statistics safely using UPSERT logic.
         """
         try:
             today = datetime.now().date()
@@ -319,17 +437,25 @@ class DatabaseManager:
                     errors = errors + ?
             """, (today, processed, stickers, errors, processed, stickers, errors))
             self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"⚠️ Stats Update Failed: {e}")
+        except sqlite3.Error:
+            # Stats failures are non-critical, so we ignore to keep bot running
+            pass
 
     def get_total_stats(self) -> Dict[str, int]:
+        """Aggregates all-time stats."""
         try:
             self.cursor.execute("SELECT SUM(processed), SUM(stickers_sent), SUM(errors) FROM stats")
             res = self.cursor.fetchone()
+            
+            # Safe unpacking
+            proc = res[0] if res and res[0] else 0
+            stik = res[1] if res and res[1] else 0
+            errs = res[2] if res and res[2] else 0
+            
             return {
-                "processed": res[0] or 0,
-                "stickers": res[1] or 0,
-                "errors": res[2] or 0
+                "processed": proc,
+                "stickers": stik,
+                "errors": errs
             }
         except sqlite3.Error:
             return {"processed": 0, "stickers": 0, "errors": 0}
@@ -343,6 +469,7 @@ db = DatabaseManager(DB_NAME)
 
 # 1. Telegram Client Initialization
 # Using 'enterprise_publisher_bot' session file
+# This creates a persistent session, so login is only needed once.
 app = Client(
     "enterprise_publisher_bot", 
     api_id=API_ID, 
@@ -350,20 +477,30 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# 2. In-Memory Message Queue (FIFO)
-# Ye wo line hai jahan messages wait karte hain publish hone ke liye
+# 2. In-Memory Message Queues (Smart Priority System)
+# ---------------------------------------------------
+# 🔥 VIP Queue: Urgent/Breaking News (Processed FIRST)
+vip_queue = asyncio.Queue()
+
+# 📥 Normal Queue: Standard Posts (Processed FIFO)
 msg_queue = asyncio.Queue()
 
 # 3. User Input State (RAM)
-# Track karta hai ki kaun user abhi kya set kar raha hai
-# Keys: User ID, Values: Mode (e.g., 'SET_CHANNEL', 'SET_DELAY')
+# Track karta hai ki kaun user abhi kya set kar raha hai.
+# Example: {12345: "SET_CHANNEL", 67890: "ADD_STICKER"}
 user_input_mode: Dict[int, str] = {}
 
 # 4. System Start Time (For Uptime Calculation)
+# Used in the Dashboard to show how long the bot has been running.
 start_time = time.time()
 
-# Note: Sticker Cache removed because we are using Raw API logic now.
-# This saves RAM and prevents startup crashes.
+# 5. Smart Album Tracking (For Sticker Logic)
+# Stores the 'media_group_id' of the last processed message.
+# Used to prevent spamming stickers in the middle of an album.
+last_processed_album_id = None 
+
+# Note: Sticker Cache removed to save RAM on Render Free Tier.
+# We fetch stickers dynamically using Raw API.
 
 # ==============================================================================
 #                           HELPER FUNCTIONS
@@ -372,10 +509,14 @@ start_time = time.time()
 def get_uptime() -> str:
     """
     Returns a human-readable uptime string (e.g., '2d 4h 30m 15s').
-    Includes safety check for start_time.
+    Includes safety check for start_time variable.
     """
     try:
         # Calculate total seconds
+        # 'start_time' must be defined in Global State
+        if 'start_time' not in globals():
+            return "0d 0h 0m 0s"
+            
         seconds = int(time.time() - start_time)
         
         # Calculate Days, Hours, Minutes, Seconds
@@ -388,7 +529,7 @@ def get_uptime() -> str:
     except Exception as e:
         logger.error(f"⚠️ Uptime Error: {e}")
         return "0d 0h 0m 0s"
-
+        
 # ==============================================================================
 #                           GUI KEYBOARD FACTORIES
 # ==============================================================================
@@ -396,59 +537,111 @@ def get_uptime() -> str:
 def get_main_menu() -> InlineKeyboardMarkup:
     """
     Generates the Main Dashboard with live status.
-    Updates dynamically based on DB settings.
+    Reflects the new 'Smart Mode' and 'Sticker Status'.
     """
     try:
         # 1. Fetch live state from DB
         is_paused = db.get_setting("is_paused", "0") == "1"
         target_ch = db.get_setting("target_channel", "0")
         delay = db.get_setting("delay", "30")
-        mode = db.get_setting("mode", "copy")
-        footer_val = db.get_setting("footer", "NONE")
         
+        # Mode Logic: Forward (Tag) vs Copy (No Tag)
+        mode = db.get_setting("mode", "copy") 
+        mode_display = "⏩ Forward (Tag)" if mode == "forward" else "©️ Copy (No Tag)"
+        
+        # Sticker Status
+        st_state = db.get_setting("sticker_state", "ON")
+        st_icon = "🟢" if st_state == "ON" else "🔴"
+        
+        footer_val = db.get_setting("footer", "NONE")
+        footer_status = "✅ ON" if footer_val != "NONE" else "❌ OFF"
+
         # 2. Logic for Buttons
-        status_text = "🔴 PAUSED" if is_paused else "🟢 RUNNING"
-        # Agar running hai to button 'Pause' karega, agar paused hai to 'Resume'
+        status_text = "🔴 SYSTEM PAUSED" if is_paused else "🟢 SYSTEM RUNNING"
         status_callback = "resume_bot" if is_paused else "pause_bot"
         
         # Channel Status
-        if target_ch == "0":
-            ch_text = "⚠️ Set Target Channel"
-        else:
-            ch_text = f"📡 Channel: {target_ch}"
+        ch_text = "⚠️ Set Target Channel" if target_ch == "0" else f"📡 ID: {target_ch}"
 
-        # Footer Status
-        footer_status = "✅ ON" if footer_val != "NONE" else "❌ OFF"
-
-        # 3. Construct Keyboard
+        # 3. Construct Keyboard (Professional Layout)
         keyboard = [
             [
                 InlineKeyboardButton(status_text, callback_data=status_callback),
+            ],
+            [
                 InlineKeyboardButton(ch_text, callback_data="ask_channel")
             ],
             [
                 InlineKeyboardButton(f"⏱ Delay: {delay}s", callback_data="ask_delay"),
-                InlineKeyboardButton(f"🔄 Mode: {mode.upper()}", callback_data="toggle_mode")
+                InlineKeyboardButton(f"🔄 {mode_display}", callback_data="toggle_mode")
             ],
             [
                 InlineKeyboardButton(f"✍️ Footer: {footer_status}", callback_data="menu_footer"),
-                InlineKeyboardButton(f"🎭 Stickers", callback_data="menu_stickers")
+                InlineKeyboardButton(f"🎭 Stickers: {st_state} {st_icon}", callback_data="menu_stickers")
             ],
             [
                 InlineKeyboardButton(f"📥 Queue: {msg_queue.qsize()}", callback_data="view_queue"),
-                InlineKeyboardButton("📊 Stats & Analytics", callback_data="view_stats")
+                InlineKeyboardButton("📊 Analytics", callback_data="view_stats")
             ],
             [
-                InlineKeyboardButton("⚙️ Admin Mgmt", callback_data="menu_admins"),
-                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_home")
+                InlineKeyboardButton("⚙️ Admin Panel", callback_data="menu_admins"),
+                InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="refresh_home")
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
         
     except Exception as e:
         logger.error(f"❌ Menu Generation Error: {e}")
-        # Fallback menu in case of error
         return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Error! Click to Refresh", callback_data="refresh_home")]])
+
+def get_sticker_menu() -> InlineKeyboardMarkup:
+    """
+    Advanced Sticker Control Panel.
+    Allows toggling ON/OFF and switching between Random/Single modes.
+    """
+    # Fetch Settings
+    state = db.get_setting("sticker_state", "ON")     # ON / OFF
+    mode = db.get_setting("sticker_mode", "RANDOM")   # RANDOM / SINGLE
+    
+    # State Button Logic
+    btn_state_text = "🔴 Turn OFF" if state == "ON" else "🟢 Turn ON"
+    btn_state_cb = "toggle_sticker_off" if state == "ON" else "toggle_sticker_on"
+    
+    # Mode Button Logic
+    btn_mode_text = "🎲 Mode: Random Pack" if mode == "RANDOM" else "🎯 Mode: Fixed Sticker"
+    btn_mode_cb = "set_mode_single" if mode == "RANDOM" else "set_mode_random"
+    
+    btns = [
+        [
+            InlineKeyboardButton(btn_state_text, callback_data=btn_state_cb),
+            InlineKeyboardButton(btn_mode_text, callback_data=btn_mode_cb)
+        ],
+        [
+            InlineKeyboardButton("➕ Add Pack (Random)", callback_data="ask_sticker"),
+            InlineKeyboardButton("🎯 Set Single Sticker", callback_data="ask_single_sticker")
+        ]
+    ]
+
+    # Show Packs list only if Random Mode is Active or for management
+    packs = db.get_sticker_packs()
+    if packs:
+        btns.append([InlineKeyboardButton(f"--- 📦 Manage {len(packs)} Packs ---", callback_data="noop")])
+        for i, pack in enumerate(packs):
+            if i >= 5: # Limit list to 5 to keep UI clean
+                btns.append([InlineKeyboardButton(f"➕ And {len(packs)-5} more...", callback_data="noop")])
+                break
+            
+            # Smart Name Truncation
+            name = pack.split('/')[-1]
+            if len(name) > 15: name = name[:12] + "..."
+            
+            btns.append([
+                InlineKeyboardButton(f"📦 {name}", callback_data="noop"),
+                InlineKeyboardButton("🗑 Del", callback_data=f"del_pack_{pack}")
+            ])
+            
+    btns.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="back_home")])
+    return InlineKeyboardMarkup(btns)
 
 def get_footer_menu() -> InlineKeyboardMarkup:
     """Sub-menu for Footer Management."""
@@ -465,38 +658,15 @@ def get_footer_menu() -> InlineKeyboardMarkup:
     
     return InlineKeyboardMarkup(btns)
 
-def get_sticker_menu() -> InlineKeyboardMarkup:
+def get_upload_success_kb() -> InlineKeyboardMarkup:
     """
-    Sub-menu for Sticker Management.
-    Limits display to 10 packs to prevent Telegram errors.
+    🔥 NEW: Dikhata hai jab file queue me lag jati hai.
+    User choose kar sakta hai aur file bhejna hai ya wapis menu jana hai.
     """
-    packs = db.get_sticker_packs()
-    
-    btns = []
-    
-    if not packs:
-        btns.append([InlineKeyboardButton("🚫 No Sticker Packs Active", callback_data="noop")])
-    else:
-        # Show existing packs (Limit 10)
-        for i, pack in enumerate(packs):
-            if i >= 10:
-                btns.append([InlineKeyboardButton(f"➕ And {len(packs)-10} more...", callback_data="noop")])
-                break
-                
-            # Shorten name for button if too long
-            display_name = pack.split('/')[-1] if '/' in pack else pack
-            if len(display_name) > 20: 
-                display_name = display_name[:17] + "..."
-            
-            btns.append([
-                InlineKeyboardButton(f"📦 {display_name}", callback_data="noop"),
-                InlineKeyboardButton("🗑 Delete", callback_data=f"del_pack_{pack}")
-            ])
-    
-    btns.append([InlineKeyboardButton("➕ Add New Sticker Pack", callback_data="ask_sticker")])
-    btns.append([InlineKeyboardButton("🔙 Back to Home", callback_data="back_home")])
-    
-    return InlineKeyboardMarkup(btns)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Send More Files", callback_data="noop")], # 'noop' means no operation (just stays in chat)
+        [InlineKeyboardButton("🔙 Return to Main Menu", callback_data="refresh_home")]
+    ])
 
 def get_cancel_kb() -> InlineKeyboardMarkup:
     """Standard Cancel Button."""
@@ -507,6 +677,8 @@ def get_back_home_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="back_home")]])
 
 
+
+
 # ==============================================================================
 #                           CORE WORKER ENGINE
 # ==============================================================================
@@ -514,67 +686,116 @@ def get_back_home_kb() -> InlineKeyboardMarkup:
 
 
 # ==============================================================================
-#                           AUTO-BACKUP SYSTEM
+#                           AUTO-BACKUP SYSTEM (With Storage Cleaner)
 # ==============================================================================
 async def auto_backup_task(app):
     """
-    Har 1 ghante mein database file Super Admin ko bhejta hai.
-    Taaki Render restart hone par data loose na ho.
+    1. Sends Database Backup to Super Admin every 1 Hour.
+    2. Cleans up 'downloads' folder to keep Render Free Tier alive.
     """
-    logger.info("💾 Auto-Backup System Started...")
+    logger.info("💾 Auto-Backup & Cleanup System Started...")
+    
     while True:
         try:
-            # 1 Ghanta (3600 seconds) wait karega
+            # ⏳ 1 Hour Interval (3600 Seconds)
             await asyncio.sleep(3600)
             
-            if os.path.exists(DB_NAME):
-                # File ka size check karein (Empty file na bheje)
-                if os.path.getsize(DB_NAME) > 0:
-                    await app.send_document(
-                        chat_id=SUPER_ADMIN_ID,
-                        document=DB_NAME,
-                        caption=(
-                            f"🗄 **System Backup**\n"
-                            f"📅 Date: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
-                            f"⚠️ **Note:** Agar bot restart ho, toh is file ko use karein."
-                        )
-                    )
-                    logger.info("✅ Database Backup sent to Super Admin.")
-                else:
-                    logger.warning("⚠️ Database file is empty. Skipping backup.")
-            else:
-                logger.warning("⚠️ Database file not found!")
+            # --- TASK 1: DATABASE BACKUP ---
+            if os.path.exists(DB_NAME) and os.path.getsize(DB_NAME) > 0:
+                caption = (
+                    f"🗄 **System Backup (Hourly)**\n"
+                    f"📅 Date: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
+                    f"ℹ️ **Restore:** Reply to this file with `/restore` command.\n"
+                    f"🧹 **Status:** Cache Cleared."
+                )
                 
+                await app.send_document(
+                    chat_id=SUPER_ADMIN_ID,
+                    document=DB_NAME,
+                    caption=caption
+                )
+                logger.info("✅ Database Backup sent to Super Admin.")
+            else:
+                logger.warning("⚠️ Database file not found or empty!")
+
+            # --- TASK 2: STORAGE CLEANUP (Injecting for Render Free Tier) ---
+            # Har ghante hum 'downloads' folder aur purane logs saaf karenge
+            # Taaki Render ki 512MB storage kabhi full na ho.
+            
+            # A. Clean Downloads Folder
+            if os.path.exists("downloads"):
+                for filename in os.listdir("downloads"):
+                    file_path = os.path.join("downloads", filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        logger.error(f"⚠️ Cleanup Error: {e}")
+                logger.info("🧹 Downloads folder wiped to save space.")
+
+            # B. Truncate Logs if too big (Safety Net)
+            if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 5 * 1024 * 1024:
+                # Agar log 5MB se bada ho gaya, to usko khali kar do
+                with open(LOG_FILE, "w") as f:
+                    f.truncate(0)
+                logger.info("🧹 System Log truncated (Size Limit).")
+
         except Exception as e:
-            logger.error(f"❌ Backup Failed: {e}")
-            await asyncio.sleep(60) # Error aaya toh 1 min baad fir try karega
+            logger.error(f"❌ Backup/Cleanup Failed: {e}")
+            await asyncio.sleep(60) # Error aaya toh 1 min wait karke retry
+
+
 
 # ==============================================================================
-#                        SMART STICKER SENDER (RAW API)
+#                        SMART STICKER SENDER (LOGIC INJECTED)
 # ==============================================================================
 from pyrogram.raw import functions, types
 import random
 
-async def send_random_sticker_from_db(client, chat_id):
+async def send_smart_sticker(client, chat_id):
     """
-    Ye function Database se Sticker Pack ka naam padhta hai,
-    Stickers fetch karta hai, aur ek Random Sticker bhejta hai.
+    Decides whether to send a Fixed Sticker or a Random one from packs.
+    Handles 'SINGLE' vs 'RANDOM' logic dynamically.
     """
     try:
-        # 1. Database se Sticker Pack ka naam nikalo
-        # (Assuming aapne settings table me 'sticker_pack' column banaya hai)
-        # Agar aapka logic alag hai, toh bas yahan pack ka naam variable me layein.
-        cursor.execute("SELECT value FROM settings WHERE key='sticker_pack_link'")
-        result = cursor.fetchone()
-        
-        if not result or not result[0]:
-            return # Koi pack set nahi hai, wapis jao
-            
-        pack_link = result[0] 
-        # Link se short name nikalo (e.g., t.me/addstickers/MyPack -> MyPack)
-        short_name = pack_link.split('/')[-1]
+        # 1. Check if Stickers are Globally Enabled
+        state = db.get_setting("sticker_state", "ON")
+        if state == "OFF":
+            return # Chupchap wapis jao
 
-        # 2. Raw API se Stickers Mangwao (Ye error nahi dega)
+        # 2. Check Mode: RANDOM or SINGLE?
+        mode = db.get_setting("sticker_mode", "RANDOM") # RANDOM / SINGLE
+        
+        # --- MODE A: SINGLE FIXED STICKER ---
+        if mode == "SINGLE":
+            # User ne koi specific sticker set kiya hai
+            file_id = db.get_setting("single_sticker_id")
+            if file_id:
+                # Direct send via Pyrogram (Faster for single file_id)
+                await client.send_sticker(chat_id, file_id)
+                db.update_stats(stickers=1)
+                await asyncio.sleep(1.0) # Thoda gap
+                return
+            else:
+                # Agar Single Mode hai par ID nahi hai, to Random par fall back karo
+                pass 
+
+        # --- MODE B: RANDOM FROM PACKS (Raw API) ---
+        # DB se saare packs ki list nikalo
+        packs = db.get_sticker_packs()
+        
+        if not packs: 
+            return # Koi pack nahi hai to kuch mat karo
+
+        # Random Pack Choose karo
+        pack_name = random.choice(packs)
+        
+        # Link se short name nikalo (e.g., t.me/addstickers/MyPack -> MyPack)
+        short_name = pack_name.split('/')[-1]
+
+        # Raw API se Stickers Mangwao (Ye error nahi dega)
         pack_data = await client.invoke(
             functions.messages.GetStickerSet(
                 stickerset=types.InputStickerSetShortName(short_name=short_name),
@@ -582,456 +803,413 @@ async def send_random_sticker_from_db(client, chat_id):
             )
         )
 
-        # 3. Random Sticker Choose karo
+        # Random Sticker Choose karke Bhejo
         if pack_data and pack_data.documents:
-            random_sticker = random.choice(pack_data.documents)
+            sticker = random.choice(pack_data.documents)
             
-            # 4. Sticker Bhejo (InputDocument format me)
-            # Pyrogram ko file_id calculate karne ki zaroorat nahi, hum direct document bhejenge
-            file_ref = random_sticker.id # Raw ID handling is complex in Pyrogram wrapper
-            
-            # Simple Hack: Pyrogram ke send_sticker ko file_id chahiye hoti hai.
-            # Raw document se bhejna mushkil hai bina file_id convert kiye.
-            # Isliye hum bas sticker ka 'file_id' access karne ka try karenge agar cached hai.
-            
-            # BEST WORKING METHOD:
-            # Hum attributes check karke sahi sticker bhejenge using simplified logic
-            # Agar Raw complex lag raha hai, to hum InputMedia se hack karenge.
-            
-            # Lekin sabse simple tarika:
-            # Sticker ko "forward" nahi kar sakte bina ID ke.
-            # So, hum bas attributes se first document utha kar bhejte hain via Raw Invoke
-            
+            # Raw method se bhejo (SendMedia) - Most Robust Way
             await client.invoke(
                 functions.messages.SendMedia(
                     peer=await client.resolve_peer(chat_id),
                     media=types.InputMediaDocument(
                         id=types.InputDocument(
-                            id=random_sticker.id,
-                            access_hash=random_sticker.access_hash,
-                            file_reference=random_sticker.file_reference
+                            id=sticker.id,
+                            access_hash=sticker.access_hash,
+                            file_reference=sticker.file_reference
                         )
                     ),
                     message="",
                     random_id=client.rnd_id()
                 )
             )
-            logger.info(f"🤡 Random Sticker sent to {chat_id} from {short_name}")
-            await asyncio.sleep(1) # Thoda gap do taaki mix na ho
+            
+            db.update_stats(stickers=1)
+            logger.info(f"🤡 Sticker sent ({mode} mode): {short_name}")
+            await asyncio.sleep(1.0) # Thoda gap taaki caption mix na ho
 
     except Exception as e:
-        # Agar sticker fail ho jaye, toh main message rukna nahi chahiye
-        logger.error(f"⚠️ Sticker Error: {e}")
-
+        # Agar sticker fail ho, to ignore karo aur main post bhejo
+        # logger.error(f"⚠️ Sticker Skip: {e}")
+        pass
 
 
 # ==============================================================================
-#                           WORKER ENGINE (FINAL)
+#                           WORKER ENGINE (FINAL - ENTERPRISE LOGIC)
 # ==============================================================================
+import re # Caption cleaning ke liye
+
 async def worker_engine():
     """
-    Process Queue: Stickers -> Main Message -> Footer -> Delay
+    The Brain of the System 🧠
+    Handles:
+    1. Priority Queues (VIP first)
+    2. Smart Album Detection (No Sticker Spam)
+    3. Caption Cleaning (Regex)
+    4. Dynamic Publishing (Copy vs Forward)
     """
     logger.info("🚀 Enterprise Worker Engine Started...")
     
+    # Track last album to prevent sticker spam
+    # Hum local variable use kar rahe hain taaki global state clutter na ho
+    last_processed_album_id = None 
+    
     while True:
-        # Queue se message uthao
-        message = await msg_queue.get()
+        # -------------------------------------------------------
+        # [STEP 1] PRIORITY QUEUE FETCHING
+        # -------------------------------------------------------
+        # Pehle check karo VIP queue me kuch hai?
+        if not vip_queue.empty():
+            message = await vip_queue.get()
+            logger.info("⚡ Processing VIP Message...")
+            is_vip = True
+        else:
+            # Agar VIP khali hai, to Normal queue dekho
+            message = await msg_queue.get()
+            is_vip = False
         
         try:
-            # 1. Check Pause State
-            # Agar pause hai to yahi ruk jao jab tak resume na ho
-            while str(db.get_setting("is_paused")) == "1":
+            # 2. Check Pause State (Loop until resumed)
+            # Super Admin can pause the bot anytime
+            while db.get_setting("is_paused") == "1":
                 await asyncio.sleep(5) 
             
-            # 2. Check Target Channel
-            try:
-                target_id = int(db.get_setting("target_channel"))
-            except:
-                target_id = 0
-                
-            if target_id == 0:
+            # 3. Check Target Channel
+            target_raw = db.get_setting("target_channel", "0")
+            if target_raw == "0":
                 logger.warning("⚠️ Target channel not set. Dropping message.")
-                msg_queue.task_done()
+                if is_vip: vip_queue.task_done()
+                else: msg_queue.task_done()
                 continue
-
-            # -------------------------------------------------------
-            # [STEP 3] SMART STICKER LOGIC (Raw API - No Crash)
-            # -------------------------------------------------------
-            try:
-                # DB se sticker packs ki list lo
-                # Note: Ensure get_sticker_packs returns a LIST of strings
-                packs = db.get_sticker_packs() 
-                
-                if packs:
-                    # Random pack choose karo
-                    pack_name = random.choice(packs)
-                    short_name = pack_name.split('/')[-1] # Link se naam nikalo
-
-                    # Telegram se direct poocho (Raw Call)
-                    pack_data = await app.invoke(
-                        functions.messages.GetStickerSet(
-                            stickerset=types.InputStickerSetShortName(short_name=short_name),
-                            hash=0
-                        )
-                    )
-
-                    if pack_data and pack_data.documents:
-                        sticker = random.choice(pack_data.documents)
-                        
-                        # Sticker Bhejo
-                        await app.invoke(
-                            functions.messages.SendMedia(
-                                peer=await app.resolve_peer(target_id),
-                                media=types.InputMediaDocument(
-                                    id=types.InputDocument(
-                                        id=sticker.id,
-                                        access_hash=sticker.access_hash,
-                                        file_reference=sticker.file_reference
-                                    )
-                                ),
-                                message="",
-                                random_id=app.rnd_id()
-                            )
-                        )
-                        db.update_stats(stickers=1)
-                        logger.info(f"🤡 Sticker sent: {short_name}")
-                        await asyncio.sleep(1.0) # Gap
-                        
-            except Exception as e:
-                # Agar sticker fail ho, to ignore karo aur main message bhejo
-                # logger.error(f"⚠️ Sticker Skip: {e}") 
-                pass
-
-            # -------------------------------------------------------
-            # [STEP 4] MAIN MESSAGE PUBLISHING
-            # -------------------------------------------------------
-            mode = db.get_setting("mode") # copy / forward
-            footer = db.get_setting("footer")
             
-            # Agar footer "NONE" hai to usko None bana do
-            if str(footer).upper() == "NONE": 
-                footer = None
+            target_id = int(target_raw)
 
+            # -------------------------------------------------------
+            # [STEP 4] SMART ALBUM & STICKER LOGIC 🧠
+            # -------------------------------------------------------
+            # Logic: 
+            # 1. Agar ye message Album ka hissa hai (media_group_id hai).
+            # 2. Aur ye ID pichle message jaisi SAME hai.
+            # 3. To iska matlab ye Album ki 2nd, 3rd photo hai -> Sticker mat bhejo.
+            
+            current_group_id = message.media_group_id
+            should_send_sticker = True
+            
+            if current_group_id is not None:
+                if current_group_id == last_processed_album_id:
+                    should_send_sticker = False # Same album, skip sticker
+                    logger.info("Skipping sticker (Album continuation)")
+                else:
+                    last_processed_album_id = current_group_id # New album started
+            else:
+                last_processed_album_id = None # Not an album, reset
+
+            # Call the Helper Function we made in Part 6
+            if should_send_sticker:
+                await send_smart_sticker(app, target_id)
+
+            # -------------------------------------------------------
+            # [STEP 5] CONTENT PREPARATION (Caption Cleaner)
+            # -------------------------------------------------------
+            mode = db.get_setting("mode", "copy")
+            footer = db.get_setting("footer", "NONE")
+            cleaner_mode = db.get_setting("caption_cleaner", "OFF")
+            
+            # Extract Text
+            original_text = message.text or message.caption or ""
+            
+            # 🧹 Auto-Cleaner Logic (Regex)
+            if cleaner_mode == "ON" and original_text:
+                # Remove links (http/https/www)
+                original_text = re.sub(r'http\S+', '', original_text)
+                # Remove usernames (@username)
+                original_text = re.sub(r'@\w+', '', original_text)
+                # Remove extra spaces
+                original_text = original_text.strip()
+
+            # Merge Footer
+            if footer != "NONE" and footer:
+                if original_text:
+                    final_text = f"{original_text}\n\n{footer}"
+                else:
+                    final_text = footer
+            else:
+                final_text = original_text
+
+            # -------------------------------------------------------
+            # [STEP 6] PUBLISHING
+            # -------------------------------------------------------
             if mode == "forward":
-                # --- FORWARD MODE ---
+                # Forward with Tag
                 await message.forward(target_id)
             
             else:
-                # --- COPY MODE (Best for Branding) ---
-                # Original caption/text nikalo
-                original_text = message.text or message.caption or ""
-                
-                # Footer Jodo
-                if footer:
-                    if original_text:
-                        final_text = f"{original_text}\n\n{footer}"
-                    else:
-                        final_text = footer
-                else:
-                    final_text = original_text
-
-                # Message Copy Karo (Ye Text, Photo, Video sab handle karega)
+                # Copy (No Tag) - This is what you called "Forward without tag"
+                # .copy() method automatically handles Photo, Video, Document, Text
                 await message.copy(
                     chat_id=target_id,
                     caption=final_text
                 )
 
-            # 5. Success Logic
+            # 7. Success & Stats
             db.update_stats(processed=1)
-            q_size = msg_queue.qsize()
-            logger.info(f"✅ Published! Queue Size: {q_size}")
             
-            # 6. Dynamic Delay
-            try:
-                delay = int(db.get_setting("delay"))
-            except:
-                delay = 30 # Default if error
+            # Log Queue Size
+            q_total = msg_queue.qsize() + vip_queue.qsize()
+            logger.info(f"✅ Published. Queue Remaining: {q_total}")
             
+            # 8. Dynamic Delay
+            delay = int(db.get_setting("delay", "30"))
             await asyncio.sleep(delay)
 
         except FloodWait as e:
             logger.warning(f"⏳ FloodWait: Sleeping for {e.value} seconds.")
             await asyncio.sleep(e.value)
-            # Optional: Retry logic could go here
+            # Retry logic could be added here, but for now we skip to avoid loops
             
         except RPCError as e:
             logger.error(f"❌ Telegram API Error: {e}")
             db.update_stats(errors=1)
             
         except Exception as e:
-            logger.critical(f"❌ Unhandled Worker Error: {e}")
+            logger.critical(f"❌ Worker Error: {e}")
             traceback.print_exc()
             db.update_stats(errors=1)
             
         finally:
-            # Task complete mark karna zaroori hai
-            msg_queue.task_done()
+            # Task Done Mark karna zaroori hai
+            if is_vip:
+                vip_queue.task_done()
+            else:
+                msg_queue.task_done()
 
 # ==============================================================================
-#                           CALLBACK HANDLERS (GUI)
+#                           CALLBACK HANDLERS (GUI ENGINE)
 # ==============================================================================
 
 @app.on_callback_query()
 async def callback_router(client: Client, cb: CallbackQuery):
     """
-    💎 ULTRA-PREMIUM DASHBOARD CONTROLLER 💎
-    Handles all interactions with animations and style.
+    Handles all Button Interactions.
+    Includes Smart Toggles for Stickers & Advanced Navigation.
     """
     user_id = cb.from_user.id
     data = cb.data
 
-    # 1. Security Barrier 🛡️
+    # 1. Security Barrier 🛡️ (Admins Only)
     if not db.is_admin(user_id):
-        await cb.answer("🚫 ACCESS DENIED: Admin privileges required.", show_alert=True)
+        await cb.answer("🚫 ACCESS DENIED: Authorized Personnel Only.", show_alert=True)
         return
 
     try:
-        # --- 🏠 MAIN DASHBOARD ---
+        # --- 🏠 DASHBOARD & NAVIGATION ---
         if data in ["back_home", "refresh_home"]:
-            # Clear input state
             if user_id in user_input_mode: del user_input_mode[user_id]
             
-            # Dynamic Status Icons
             paused = db.get_setting("is_paused") == "1"
-            status_icon = "🔴 PAUSED" if paused else "🟢 ONLINE"
+            status_icon = "🔴 SYSTEM PAUSED" if paused else "🟢 SYSTEM ONLINE"
             
-            # Premium Dashboard Layout
+            # Premium Dashboard Text
             dash_text = (
-                f"🎛 **ENTERPRISE CONTROL PANEL**\n"
+                f"🎛 **ENTERPRISE CONTROL HUB**\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"👋 **Welcome:** `{cb.from_user.first_name}`\n"
-                f"🛡️ **Role:** `Super Admin`\n"
+                f"🛡️ **Access Level:** `{'Super Admin' if user_id == SUPER_ADMIN_ID else 'Admin'}`\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"📊 **SYSTEM STATUS**\n"
-                f"➤ **System State:** `{status_icon}`\n"
+                f"📊 **LIVE TELEMETRY**\n"
+                f"➤ **Status:** `{status_icon}`\n"
                 f"➤ **Uptime:** `{get_uptime()}`\n"
-                f"➤ **Queue Depth:** `{msg_queue.qsize()} Tasks`\n"
-                f"➤ **DB Latency:** `Optimal (0.01ms)`\n"
+                f"➤ **Queue Depth:** `{msg_queue.qsize()} Normal` + `{vip_queue.qsize()} VIP`\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"👇 *Tap a module to configure:* "
+                f"👇 *Select a module to configure:* "
             )
             await cb.edit_message_text(text=dash_text, reply_markup=get_main_menu())
 
-        # --- ⏯️ FLOW CONTROL ---
-        elif data == "pause_bot":
-            db.set_setting("is_paused", "1")
-            await cb.answer("⚠️ System Halted Successfully!", show_alert=True)
-            await cb.edit_message_reply_markup(get_main_menu())
-            
-        elif data == "resume_bot":
-            db.set_setting("is_paused", "0")
-            await cb.answer("🚀 System Resumed! Processing Queue...", show_alert=True)
-            await cb.edit_message_reply_markup(get_main_menu())
+        # --- ⏯️ SYSTEM CONTROL (Super Admin Only) ---
+        elif data in ["pause_bot", "resume_bot"]:
+            if user_id != SUPER_ADMIN_ID:
+                await cb.answer("⛔ Only the Owner can Pause/Resume the system!", show_alert=True)
+                return
 
+            if data == "pause_bot":
+                db.set_setting("is_paused", "1")
+                await cb.answer("⚠️ System Halted!")
+            else:
+                db.set_setting("is_paused", "0")
+                await cb.answer("🚀 System Resumed!")
+            
+            # Refresh Dashboard to show new status
+            await callback_router(client, cb)
+
+        # --- 🔄 MODE SWITCHING ---
         elif data == "toggle_mode":
             curr = db.get_setting("mode", "copy")
             new_mode = "forward" if curr == "copy" else "copy"
             db.set_setting("mode", new_mode)
             
-            icon = "⏩" if new_mode == "forward" else "©️"
-            await cb.answer(f"Mode Switched: {icon} {new_mode.upper()}")
-            await cb.edit_message_reply_markup(get_main_menu())
+            txt = "⏩ Forward (Tag)" if new_mode == "forward" else "©️ Copy (No Tag)"
+            await cb.answer(f"Mode Switched to: {txt}")
+            await callback_router(client, cb) # Refresh UI
 
-        # --- 📥 QUEUE MANAGER ---
-        elif data == "view_queue":
-            size = msg_queue.qsize()
-            if size == 0:
-                msg = "💤 The queue is currently empty. Feed me content!"
-            else:
-                msg = f"🔥 BUSY! {size} items are waiting to be published."
-            await cb.answer(msg, show_alert=True)
-
-        elif data == "confirm_clear":
-             await cb.edit_message_text(
-                "🚨 **DANGER ZONE** 🚨\n\n"
-                "Are you sure you want to **NUKE** the entire queue?\n"
-                "This action cannot be undone.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💣 YES, NUKE IT", callback_data="do_clear_queue")],
-                    [InlineKeyboardButton("🛡️ CANCEL", callback_data="back_home")]
-                ])
-            )
-            
-        elif data == "do_clear_queue":
-            count = msg_queue.qsize()
-            while not msg_queue.empty():
-                try: msg_queue.get_nowait(); msg_queue.task_done()
-                except: break
-            await cb.answer(f"💥 BOOM! {count} items deleted.", show_alert=True)
-            await cb.edit_message_text("✅ Queue has been sanitized.", reply_markup=get_back_home_kb())
-
-        # --- 📡 INPUT WIZARDS ---
-        elif data == "ask_channel":
-            user_input_mode[user_id] = "SET_CHANNEL"
-            await cb.edit_message_text(
-                "📡 **CHANNEL CONFIGURATION**\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Please perform one of the following:\n\n"
-                "1️⃣ **Forward** a message from the target channel.\n"
-                "2️⃣ **Send** the Channel ID manually (e.g., `-100...`).\n\n"
-                "💡 *Make sure I am an Admin there!*",
-                reply_markup=get_cancel_kb()
-            )
-
-        elif data == "ask_delay":
-            user_input_mode[user_id] = "SET_DELAY"
-            await cb.edit_message_text(
-                "⏱ **TIMING CONFIGURATION**\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "How many **seconds** should I wait between posts?\n\n"
-                "➤ Recommended: `30` to `60`\n"
-                "➤ Minimum: `5`",
-                reply_markup=get_cancel_kb()
-            )
-
-        elif data == "cancel_input":
-            if user_id in user_input_mode: del user_input_mode[user_id]
-            await cb.answer("🚫 Operation Cancelled")
-            await cb.edit_message_text("❌ Action aborted by user.", reply_markup=get_back_home_kb())
-
-        # --- ✍️ BRANDING (Footer) ---
-        elif data == "menu_footer":
-            await cb.edit_message_text(
-                "🎨 **BRANDING SUITE**\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Manage your auto-signature / caption.\n"
-                "This text appears at the bottom of every post.",
-                reply_markup=get_footer_menu()
-            )
-
-        elif data == "ask_footer":
-            user_input_mode[user_id] = "SET_FOOTER"
-            await cb.edit_message_text(
-                "✍️ **NEW FOOTER SETUP**\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Send your branding text now.\n\n"
-                "✅ **Supported:** HTML, Markdown, Emojis, Links.\n"
-                "💡 *Tip: Keep it short and classy.*",
-                reply_markup=get_cancel_kb()
-            )
-
-        elif data == "remove_footer":
-            db.set_setting("footer", "NONE")
-            await cb.answer("🗑 Footer Deleted Successfully")
-            await cb.edit_message_text("✅ Branding disabled.", reply_markup=get_footer_menu())
-
-        elif data == "view_footer_text":
-            ft = db.get_setting("footer", "NONE")
-            await cb.edit_message_text(
-                f"📝 **LIVE PREVIEW**\n━━━━━━━━━━━━━━━━━━\n\n{ft}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="menu_footer")]])
-            )
-
-        # --- 🎭 STICKER STUDIO ---
+        # --- 🎭 STICKER CONTROLS (NEW INJECTIONS) ---
         elif data == "menu_stickers":
             await cb.edit_message_text(
-                "🎭 **STICKER STUDIO**\n"
+                "🎭 **STICKER STUDIO PRO**\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "Inject personality into your channel!\n"
-                "I will randomly post a sticker before each message.",
+                "Configure automated engagement stickers.\n"
+                "• **Random:** Picks from your added packs.\n"
+                "• **Single:** Uses one specific sticker always.\n"
+                "• **Smart Album:** Prevents spam in photo albums.",
                 reply_markup=get_sticker_menu()
+            )
+
+        # Toggle ON/OFF
+        elif data == "toggle_sticker_on":
+            db.set_setting("sticker_state", "ON")
+            await cb.answer("✅ Stickers Enabled")
+            await cb.edit_message_reply_markup(get_sticker_menu())
+            
+        elif data == "toggle_sticker_off":
+            db.set_setting("sticker_state", "OFF")
+            await cb.answer("🚫 Stickers Disabled")
+            await cb.edit_message_reply_markup(get_sticker_menu())
+
+        # Toggle Random/Single
+        elif data == "set_mode_random":
+            db.set_setting("sticker_mode", "RANDOM")
+            await cb.answer("🎲 Mode: Random Packs")
+            await cb.edit_message_reply_markup(get_sticker_menu())
+
+        elif data == "set_mode_single":
+            db.set_setting("sticker_mode", "SINGLE")
+            await cb.answer("🎯 Mode: Single Fixed Sticker")
+            await cb.edit_message_reply_markup(get_sticker_menu())
+
+        elif data == "ask_single_sticker":
+            user_input_mode[user_id] = "SET_SINGLE_STICKER"
+            await cb.edit_message_text(
+                "🎯 **SET FIXED STICKER**\n\n"
+                "👉 Please send the **One Sticker** you want to use.",
+                reply_markup=get_cancel_kb()
             )
 
         elif data == "ask_sticker":
             user_input_mode[user_id] = "ADD_STICKER"
             await cb.edit_message_text(
-                "➕ **ADD NEW PACK**\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Send me a **Sticker** or a **Pack Link**.\n\n"
-                "Example: `https://t.me/addstickers/Duck`",
+                "➕ **ADD STICKER PACK**\n\n"
+                "👉 Send a **Sticker** from the pack OR the **Link**.\n"
+                "Ex: `https://t.me/addstickers/Animals`",
                 reply_markup=get_cancel_kb()
             )
 
         elif data.startswith("del_pack_"):
             pack = data.replace("del_pack_", "")
             db.remove_sticker_pack(pack)
-            await cb.answer(f"🗑 Pack '{pack}' deleted!")
+            await cb.answer("🗑 Pack Removed")
             await cb.edit_message_reply_markup(get_sticker_menu())
 
-        # --- 📈 ANALYTICS CENTER ---
-        elif data == "view_stats":
-            stats = db.get_total_stats()
-            start_dt = datetime.fromtimestamp(start_time).strftime('%d-%b %H:%M')
+        # --- 📥 QUEUE OPS ---
+        elif data == "view_queue":
+            q_msg = f"🔥 Pending: {msg_queue.qsize()} | ⚡ VIP: {vip_queue.qsize()}"
+            await cb.answer(q_msg, show_alert=True)
             
-            # Progress Bar Logic (Visual only)
-            total = stats['processed']
-            bar = "▓" * min(total // 10, 10) + "░" * (10 - min(total // 10, 10))
-            
-            txt = (
-                f"📊 **ANALYTICS CENTER**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🚀 **Performance Index**\n"
-                f"`[{bar}]`\n\n"
-                f"✅ **Total Published:** `{stats['processed']}`\n"
-                f"🎭 **Stickers Injected:** `{stats['stickers']}`\n"
-                f"⚠️ **Failed Attempts:** `{stats['errors']}`\n"
-                f"📅 **Since:** `{start_dt}`\n"
-                f"━━━━━━━━━━━━━━━━━━"
-            )
-            await cb.edit_message_text(txt, reply_markup=get_back_home_kb())
+        elif data == "noop":
+            await cb.answer() # Do nothing (Visual Button)
 
-        # --- ⚙️ ADMIN PANEL ---
+        # --- 📡 INPUT HANDLERS (Standard) ---
+        elif data == "ask_channel":
+            user_input_mode[user_id] = "SET_CHANNEL"
+            await cb.edit_message_text(
+                "📡 **CHANNEL CONFIGURATION**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "1️⃣ **Forward** a message from target channel.\n"
+                "2️⃣ **Send** Channel ID manually (e.g., -100...).",
+                reply_markup=get_cancel_kb()
+            )
+
+        elif data == "ask_delay":
+            user_input_mode[user_id] = "SET_DELAY"
+            await cb.edit_message_text("⏱ **SET DELAY (Seconds)**\n\n👉 Send a number (Min 5).", reply_markup=get_cancel_kb())
+
+        elif data == "cancel_input":
+            if user_id in user_input_mode: del user_input_mode[user_id]
+            await cb.answer("🚫 Cancelled")
+            await callback_router(client, cb) # Go back to home
+
+        # --- ✍️ FOOTER ---
+        elif data == "menu_footer":
+            await cb.edit_message_text("✍️ **BRANDING SUITE**\nManage your auto-signature.", reply_markup=get_footer_menu())
+
+        elif data == "ask_footer":
+            user_input_mode[user_id] = "SET_FOOTER"
+            await cb.edit_message_text("✍️ **SEND NEW FOOTER**\nSupports HTML/Markdown.", reply_markup=get_cancel_kb())
+
+        elif data == "remove_footer":
+            db.set_setting("footer", "NONE")
+            await cb.answer("🗑 Footer Deleted")
+            await cb.edit_message_reply_markup(get_footer_menu())
+            
+        elif data == "view_footer_text":
+            ft = db.get_setting("footer", "NONE")
+            await cb.edit_message_text(f"📝 **PREVIEW:**\n\n{ft}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="menu_footer")]]))
+
+        # --- ⚙️ ADMINS ---
         elif data == "menu_admins":
             if user_id != SUPER_ADMIN_ID:
-                await cb.answer("⛔ SECURITY ALERT: Super Admin Only!", show_alert=True)
+                await cb.answer("⛔ Super Admin Only!", show_alert=True)
                 return
-            
             admins = db.get_all_admins()
-            txt = "**👥 TEAM MANAGEMENT**\n━━━━━━━━━━━━━━━━━━\n"
-            for a in admins:
-                role = "👑 CEO" if a == SUPER_ADMIN_ID else "👤 Manager"
-                txt += f"• `{a}` — {role}\n"
-            
-            kb = [
-                [InlineKeyboardButton("➕ Hire Admin", callback_data="ask_add_admin")],
-                [InlineKeyboardButton("➖ Fire Admin", callback_data="ask_rem_admin")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back_home")]
-            ]
+            txt = "**👥 ADMIN TEAM:**\n\n" + "\n".join([f"• `{a}`" for a in admins])
+            kb = [[InlineKeyboardButton("➕ Add", callback_data="ask_add_admin"), InlineKeyboardButton("➖ Remove", callback_data="ask_rem_admin")], [InlineKeyboardButton("🔙 Back", callback_data="back_home")]]
             await cb.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
         elif data == "ask_add_admin":
             user_input_mode[user_id] = "ADD_ADMIN"
-            await cb.edit_message_text("👤 **HIRE ADMIN**\nSend the **User ID** to authorize.", reply_markup=get_cancel_kb())
+            await cb.edit_message_text("👤 Send **User ID** to Hire.", reply_markup=get_cancel_kb())
 
         elif data == "ask_rem_admin":
             user_input_mode[user_id] = "REM_ADMIN"
-            await cb.edit_message_text("👤 **FIRE ADMIN**\nSend the **User ID** to revoke access.", reply_markup=get_cancel_kb())
+            await cb.edit_message_text("👤 Send **User ID** to Fire.", reply_markup=get_cancel_kb())
+            
+        # --- 📊 STATS ---
+        elif data == "view_stats":
+            stats = db.get_total_stats()
+            txt = f"📊 **STATS**\n✅ Sent: `{stats['processed']}`\n🎭 Stickers: `{stats['stickers']}`\n❌ Errors: `{stats['errors']}`"
+            await cb.edit_message_text(txt, reply_markup=get_back_home_kb())
 
     except MessageNotModified:
         pass 
     except Exception as e:
         logger.error(f"Callback Error: {e}")
-        await cb.answer("❌ System Error! Check logs.", show_alert=True)
-
+        await cb.answer("❌ Error!", show_alert=True)
 
 # ==============================================================================
-#                           INPUT MESSAGE HANDLER
+#                           INPUT MESSAGE HANDLER (ENTERPRISE)
 # ==============================================================================
 
-@app.on_message(filters.private & ~filters.bot)
+@app.on_message(filters.private & ~filters.bot & ~filters.command(["restore", "logs"]))
 async def message_processor(client: Client, message: Message):
     """
+    The Gatekeeper 🛡️
     Handles:
-    1. /start command
-    2. Admin Inputs (Setting channels, delays, etc)
-    3. Queue Content Ingestion
+    1. /start & Navigation
+    2. Configuration Inputs (Channel, Sticker, etc.)
+    3. Content Ingestion (Queue + Feedback)
     """
     user_id = message.from_user.id
 
-    # 1. AUTHENTICATION
+    # 1. SECURITY & AUTHENTICATION
     if not db.is_admin(user_id):
-        # Allow bot to ignore random people
-        return
+        return # Ignore unauthorized users silently
 
-    # 2. COMMANDS
+    # 2. COMMANDS (/start)
     if message.text and message.text.lower() == "/start":
-        # Reset any stuck input mode
-        user_input_mode.pop(user_id, None)
+        # Reset stuck states
+        if user_id in user_input_mode: del user_input_mode[user_id]
+        
         await message.reply_text(
-            f"👋 **Hello {message.from_user.first_name}!**\n\n"
-            "Welcome to the **Enterprise Publisher Dashboard**.\n"
-            "Use the buttons below to control the system.",
+            f"👋 **Hello Boss, {message.from_user.first_name}!**\n\n"
+            "🚀 **Enterprise Publisher System Online**\n"
+            "Ready to manage your channel content.",
             reply_markup=get_main_menu()
         )
         return
@@ -1046,360 +1224,385 @@ async def message_processor(client: Client, message: Message):
                 target = None
                 if message.forward_from_chat:
                     target = message.forward_from_chat.id
+                    title = message.forward_from_chat.title
                 elif message.text:
-                    try:
-                        target = int(message.text)
+                    try: target = int(message.text); title = "Manual ID"
                     except: pass
                 
                 if target:
                     db.set_setting("target_channel", str(target))
-                    await message.reply_text(f"✅ **Target Channel Updated:** `{target}`", reply_markup=get_back_home_kb())
+                    await message.reply_text(
+                        f"✅ **Target Channel Locked!**\nID: `{target}`\nName: `{title}`", 
+                        reply_markup=get_back_home_kb()
+                    )
                 else:
-                    await message.reply_text("❌ Invalid ID. Please forward from channel or send numeric ID.")
-                    return # Retry input
+                    await message.reply_text("❌ Invalid Input. Forward a message or send ID.")
+                    return
 
             # --- SET DELAY ---
             elif mode == "SET_DELAY":
                 try:
                     val = int(message.text)
-                    if val < 1: raise ValueError
+                    if val < 5: raise ValueError
                     db.set_setting("delay", str(val))
-                    await message.reply_text(f"✅ **Delay Set:** `{val} seconds`", reply_markup=get_back_home_kb())
+                    await message.reply_text(f"⏱ **Delay Updated:** `{val} seconds`", reply_markup=get_back_home_kb())
                 except:
-                    await message.reply_text("❌ Please send a valid number (minimum 1).")
+                    await message.reply_text("❌ Invalid! Minimum delay is 5 seconds.")
                     return
 
             # --- SET FOOTER ---
             elif mode == "SET_FOOTER":
-                db.set_setting("footer", message.text.html if message.text else "NONE")
-                await message.reply_text("✅ **Footer Text Updated!**", reply_markup=get_footer_menu())
+                text = message.text.html if message.text else "NONE"
+                db.set_setting("footer", text)
+                await message.reply_text("✍️ **Branding Footer Updated!**", reply_markup=get_footer_menu())
 
-            # --- ADD STICKER ---
+            # --- ADD STICKER PACK (Random Mode) ---
             elif mode == "ADD_STICKER":
                 pack_name = None
-                
-                # Check if it's a sticker object
                 if message.sticker:
                     pack_name = message.sticker.set_name
-                # Check if it's a text link
                 elif message.text:
                     if "addstickers/" in message.text:
-                        pack_name = message.text.split("addstickers/")[-1]
+                        pack_name = message.text.split("addstickers/")[-1].split()[0]
                     else:
-                        pack_name = message.text
+                        pack_name = message.text.strip()
                 
                 if pack_name:
                     db.add_sticker_pack(pack_name)
-                    # Refresh Cache immediately
-                    asyncio.create_task(refresh_sticker_cache(client))
-                    await message.reply_text(f"✅ **Sticker Pack Added:** `{pack_name}`", reply_markup=get_sticker_menu())
+                    # NOTE: Removed 'refresh_cache' call as we use Raw API now (Crash Fix)
+                    await message.reply_text(f"✅ **Pack Added:** `{pack_name}`", reply_markup=get_sticker_menu())
                 else:
-                    await message.reply_text("❌ Could not detect sticker pack name. Try sending a sticker from the pack.")
+                    await message.reply_text("❌ Error. Send a sticker or a valid link.")
+                    return
+
+            # --- [NEW] SET SINGLE STICKER (Fixed Mode) ---
+            elif mode == "SET_SINGLE_STICKER":
+                if message.sticker:
+                    file_id = message.sticker.file_id
+                    db.set_setting("single_sticker_id", file_id)
+                    db.set_setting("sticker_mode", "SINGLE") # Auto-switch to single mode
+                    await message.reply_text("🎯 **Fixed Sticker Set!**\nSystem is now in 'Single Sticker' mode.", reply_markup=get_sticker_menu())
+                else:
+                    await message.reply_text("❌ Please send a Sticker.")
                     return
 
             # --- ADMIN MANAGEMENT ---
             elif mode == "ADD_ADMIN":
                 try:
-                    new_admin = int(message.text)
-                    db.add_admin(new_admin, user_id)
-                    await message.reply_text(f"✅ **Admin Added:** `{new_admin}`", reply_markup=get_back_home_kb())
+                    new_id = int(message.text)
+                    db.add_admin(new_id, user_id)
+                    await message.reply_text(f"👤 **Admin Hired:** `{new_id}`", reply_markup=get_back_home_kb())
                 except:
-                    await message.reply_text("❌ Invalid ID. Send numeric User ID.")
+                    await message.reply_text("❌ Send Numeric User ID.")
                     return
 
             elif mode == "REM_ADMIN":
                 try:
                     rem_id = int(message.text)
                     if rem_id == SUPER_ADMIN_ID:
-                        await message.reply_text("❌ You cannot remove the Super Admin.")
+                        await message.reply_text("🛡️ **Security Alert:** Cannot remove Super Admin.")
                     else:
                         db.remove_admin(rem_id)
-                        await message.reply_text(f"🗑 **Admin Removed:** `{rem_id}`", reply_markup=get_back_home_kb())
+                        await message.reply_text(f"🗑 **Admin Fired:** `{rem_id}`", reply_markup=get_back_home_kb())
                 except:
                     await message.reply_text("❌ Invalid ID.")
                     return
 
-            # Clear Input Mode on Success
+            # Cleanup Input Mode
             del user_input_mode[user_id]
         
         except Exception as e:
             logger.error(f"Input Handler Error: {e}")
-            await message.reply_text(f"❌ **Error:** {e}\nTry again or Click Cancel.")
+            await message.reply_text(f"❌ Error: {e}", reply_markup=get_back_home_kb())
         
-        return # Stop processing, don't queue this message
-
-    # 4. QUEUE INGESTION (Normal Operation)
-    target_channel = db.get_setting("target_channel")
-    if target_channel == "0":
-        await message.reply_text("⚠️ **Target Channel NOT Set!**\nUse the menu to set it first.", reply_markup=get_main_menu())
         return
 
-    # Add to Queue
-    await msg_queue.put(message)
-    
-    # User Feedback
-    q_size = msg_queue.qsize()
-    is_paused = db.get_setting("is_paused") == "1"
-    
-    # Don't spam admin on every message, just small confirmation
-    if q_size == 1 and not is_paused:
-        await message.reply_text(f"✅ **Started Processing...** (1st in Queue)")
-    elif q_size % 5 == 0:
-        await message.reply_text(f"📥 **Queued.** Total Pending: {q_size}")
+    # 4. QUEUE INGESTION (File Uploads)
+    target_channel = db.get_setting("target_channel")
+    if target_channel == "0":
+        await message.reply_text("⚠️ **Setup Required!**\nSet a Target Channel first.", reply_markup=get_main_menu())
+        return
 
-# ==============================================================================
-#                           MESSAGE HANDLERS (INPUT & QUEUE)
-# ==============================================================================
+    # --- ⚡ PRIORITY CHECK (VIP Logic) ---
+    # Agar caption me #urgent ya #vip hai, to VIP Queue me daalo
+    is_vip = False
+    caption = message.caption or ""
+    if "#urgent" in caption.lower() or "#vip" in caption.lower():
+        is_vip = True
+        await vip_queue.put(message)
+    else:
+        await msg_queue.put(message)
 
-@app.on_message(filters.private & filters.command("start"))
-async def start_handler(client: Client, message: Message):
-    """
-    Handles the /start command.
-    Shows the Dashboard if user is Admin.
-    """
-    user_id = message.from_user.id
+    # --- 📊 LIVE FEEDBACK & BUTTONS ---
+    # User ko immediately pata chalna chahiye ki kaam ho gaya
     
-    # 1. Security Check
-    if not db.is_admin(user_id):
-        return await message.reply(
-            "🛑 **ACCESS DENIED**\n\n"
-            "This is a private Enterprise Bot.\n"
-            "Your ID has been logged."
+    # Calculate Position
+    pos = vip_queue.qsize() if is_vip else msg_queue.qsize()
+    queue_type = "⚡ VIP Queue" if is_vip else "📥 Normal Queue"
+    
+    # Send Interactive Confirmation
+    # (Agar album hai, to shuru me spam na kare, isliye hum 'reply' use karte hain
+    # jo user ko notification dega)
+    try:
+        await message.reply_text(
+            f"✅ **Added to {queue_type}**\n"
+            f"🔢 Position: `{pos}`\n"
+            f"⏳ Processing in background...",
+            quote=True,
+            reply_markup=get_upload_success_kb() # <-- "Add More" & "Back" Buttons here
         )
+    except Exception as e:
+        logger.error(f"Feedback Error: {e}")
 
-    # 2. Show Dashboard
+# ==============================================================================
+#                           COMMAND HANDLERS
+# ==============================================================================
+
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    """Shows the Main Dashboard."""
+    if not db.is_admin(message.from_user.id):
+        return
+    
+    # Clear any stuck input modes
+    if message.from_user.id in user_input_mode:
+        del user_input_mode[message.from_user.id]
+
     await message.reply(
-        text=(
-            f"🤖 **Enterprise Publisher Dashboard**\n"
-            f"➖➖➖➖➖➖➖➖➖➖\n"
-            f"👋 **Welcome:** `{message.from_user.first_name}`\n"
-            f"⚡ **System:** `Online & Ready`\n"
-            f"➖➖➖➖➖➖➖➖➖➖\n"
-            f"👇 **Command Center:**"
-        ),
+        f"🤖 **Enterprise Publisher Dashboard**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👋 Welcome, Boss `{message.from_user.first_name}`!\n"
+        f"⚡ System is **Online** and ready.\n"
+        f"━━━━━━━━━━━━━━━━━━",
         reply_markup=get_main_menu()
     )
 
-@app.on_message(filters.private & ~filters.command("restore")) # Restore command is separate
-async def input_handler(client: Client, message: Message):
-    """
-    The Brain of the Bot 🧠
-    Handles:
-    1. Configuration Inputs (Channel, Delay, Footer, etc.)
-    2. Adding posts to the Queue (Default behavior)
-    """
-    user_id = message.from_user.id
+@app.on_message(filters.command("logs") & filters.private)
+async def logs_handler(client: Client, message: Message):
+    """Sends the system.log file to Super Admin for debugging."""
+    if message.from_user.id != SUPER_ADMIN_ID: return
     
-    # Security Check
-    if not db.is_admin(user_id):
+    if os.path.exists(LOG_FILE):
+        await message.reply_document(
+            LOG_FILE, 
+            caption="📜 **System Logs** (Last 5MB)"
+        )
+    else:
+        await message.reply("⚠️ Log file is empty or missing.")
+
+@app.on_message(filters.command("restore") & filters.private)
+async def restore_handler(client: Client, message: Message):
+    """Restores the database from a backup file."""
+    if message.from_user.id != SUPER_ADMIN_ID: return
+
+    if not message.reply_to_message or not message.reply_to_message.document:
+        await message.reply("⚠️ **Usage:** Reply to a `.db` backup file with `/restore`.")
         return
 
-    # Check if user is in a specific Input Mode (e.g., Setting Channel)
-    mode = user_input_mode.get(user_id)
+    try:
+        status = await message.reply("⏳ **Restoring Database...**")
+        # Download and overwrite existing DB
+        await message.reply_to_message.download(file_name=DB_NAME)
+        
+        # Re-initialize DB Connection
+        db.connect() 
+        
+        await status.edit("✅ **Restore Complete!**\nSystem updated with backup data.")
+    except Exception as e:
+        await message.reply(f"❌ Restore Failed: {e}")
 
-    if mode:
+# ==============================================================================
+#                           MAIN INPUT PROCESSOR
+# ==============================================================================
+
+@app.on_message(filters.private & ~filters.bot)
+async def message_processor(client: Client, message: Message):
+    """
+    The Master Input Handler 🛡️
+    Handles: Config Inputs AND Content Queuing with Feedback.
+    """
+    user_id = message.from_user.id
+    if not db.is_admin(user_id): return
+
+    # --- A. CONFIGURATION MODE ---
+    if user_id in user_input_mode:
+        mode = user_input_mode[user_id]
         try:
-            # --- 1. SET CHANNEL ---
+            # 1. Channel Setup
             if mode == "SET_CHANNEL":
-                # Logic: Forward message or Text ID
-                if message.forward_from_chat:
-                    chat_id = message.forward_from_chat.id
-                    title = message.forward_from_chat.title
-                elif message.text:
-                    try:
-                        chat_id = int(message.text)
-                        title = "Manually Added"
-                    except ValueError:
-                        await message.reply("❌ Invalid ID! Please send a numeric ID (e.g., -100xxx).")
-                        return
+                target = None
+                if message.forward_from_chat: target = message.forward_from_chat.id
+                elif message.text: 
+                    try: target = int(message.text)
+                    except: pass
+                
+                if target:
+                    db.set_setting("target_channel", str(target))
+                    await message.reply(f"✅ **Target Channel Set:** `{target}`", reply_markup=get_back_home_kb())
                 else:
-                    await message.reply("❌ Please forward a message or send an ID.")
+                    await message.reply("❌ Invalid ID. Forward from channel or send ID.")
                     return
 
-                db.set_setting("target_channel", str(chat_id))
-                await message.reply(
-                    f"✅ **Channel Configured!**\n\nID: `{chat_id}`\nTitle: `{title}`",
-                    reply_markup=get_back_home_kb()
-                )
-
-            # --- 2. SET DELAY ---
+            # 2. Delay Setup
             elif mode == "SET_DELAY":
                 try:
                     val = int(message.text)
-                    if val < 5:
-                        await message.reply("⚠️ Too fast! Minimum delay is 5 seconds.")
-                        return
+                    if val < 5: raise ValueError
                     db.set_setting("delay", str(val))
-                    await message.reply(f"⏱ **Delay Updated:** `{val} seconds`", reply_markup=get_back_home_kb())
-                except ValueError:
-                    await message.reply("❌ Please send a valid number.")
+                    await message.reply(f"⏱ **Delay Updated:** `{val}s`", reply_markup=get_back_home_kb())
+                except:
+                    await message.reply("❌ Number must be > 5.")
                     return
 
-            # --- 3. SET FOOTER ---
+            # 3. Footer Setup
             elif mode == "SET_FOOTER":
-                text = message.text or message.caption
-                if not text:
-                    await message.reply("❌ Please send text content.")
-                    return
-                db.set_setting("footer", text) # HTML/Markdown preserved
-                await message.reply("✍️ **Footer Updated Successfully!**", reply_markup=get_back_home_kb())
+                txt = message.text.html if message.text else "NONE"
+                db.set_setting("footer", txt)
+                await message.reply("✍️ **Footer Updated!**", reply_markup=get_footer_menu())
 
-            # --- 4. ADD STICKER PACK ---
+            # 4. Sticker Pack (Random)
             elif mode == "ADD_STICKER":
-                pack_name = None
+                pack = None
+                if message.sticker: pack = message.sticker.set_name
+                elif message.text: pack = message.text.split('/')[-1] if '/' in message.text else message.text
                 
-                # Option A: Sticker Object
-                if message.sticker:
-                    pack_name = message.sticker.set_name
-                
-                # Option B: Text Link
-                elif message.text:
-                    # Extract name from t.me/addstickers/Name
-                    if "t.me/addstickers/" in message.text:
-                        pack_name = message.text.split("addstickers/")[-1].split()[0]
-                    else:
-                        pack_name = message.text.strip()
-                
-                if not pack_name:
-                    await message.reply("❌ Could not detect sticker pack. Try sending a sticker from the pack.")
+                if pack:
+                    db.add_sticker_pack(pack)
+                    await message.reply(f"✅ **Pack Added:** `{pack}`", reply_markup=get_sticker_menu())
+                else:
+                    await message.reply("❌ Invalid Sticker/Link.")
                     return
-                
-                # Link bana kar save karte hain for safety
-                full_link = f"https://t.me/addstickers/{pack_name}"
-                db.add_sticker_pack(full_link)
-                # Ensure setting for smart sender
-                db.set_setting("sticker_pack_link", full_link) 
-                
-                await message.reply(f"✅ **Pack Added:** `{pack_name}`", reply_markup=get_back_home_kb())
 
-            # --- 5. ADMIN MANAGEMENT ---
+            # 5. Single Sticker (Fixed)
+            elif mode == "SET_SINGLE_STICKER":
+                if message.sticker:
+                    db.set_setting("single_sticker_id", message.sticker.file_id)
+                    db.set_setting("sticker_mode", "SINGLE")
+                    await message.reply("🎯 **Single Sticker Mode Activated!**", reply_markup=get_sticker_menu())
+                else:
+                    await message.reply("❌ Please send a sticker.")
+                    return
+
+            # 6. Admin Mgmt
             elif mode == "ADD_ADMIN":
                 try:
-                    new_admin_id = int(message.text)
-                    db.add_admin(new_admin_id, user_id)
-                    await message.reply(f"👤 **Admin Added:** `{new_admin_id}`", reply_markup=get_back_home_kb())
-                except:
-                    await message.reply("❌ Invalid User ID.")
+                    db.add_admin(int(message.text), user_id)
+                    await message.reply("👤 **Admin Added.**", reply_markup=get_back_home_kb())
+                except: await message.reply("❌ Invalid ID.")
+                return
 
             elif mode == "REM_ADMIN":
                 try:
-                    rem_id = int(message.text)
-                    if rem_id == SUPER_ADMIN_ID:
-                        await message.reply("❌ You cannot fire the CEO (Super Admin).")
-                        return
-                    db.remove_admin(rem_id)
-                    await message.reply(f"🗑 **Admin Removed:** `{rem_id}`", reply_markup=get_back_home_kb())
-                except:
-                    await message.reply("❌ Invalid User ID.")
+                    db.remove_admin(int(message.text))
+                    await message.reply("🗑 **Admin Removed.**", reply_markup=get_back_home_kb())
+                except: await message.reply("❌ Invalid ID.")
+                return
 
-            # --- CLEANUP ---
-            # Remove user from input mode after success
+            # Cleanup
             del user_input_mode[user_id]
-
+        
         except Exception as e:
-            logger.error(f"Input Handler Error: {e}")
-            await message.reply("❌ An error occurred. Try again.")
+            logger.error(f"Input Error: {e}")
+            await message.reply("❌ Error occurred.", reply_markup=get_back_home_kb())
+        return
 
+    # --- B. CONTENT QUEUEING (The Smart Part) ---
+    
+    # 1. Check Pre-requisites
+    if db.get_setting("target_channel") == "0":
+        await message.reply("⚠️ **Target Channel Missing!** Set it in dashboard.", reply_markup=get_main_menu())
+        return
+
+    # 2. Visual Feedback (Immediate)
+    # User ko lagega bot fast hai
+    status_msg = await message.reply("⏳ **Processing...**", quote=True)
+
+    # 3. Priority Logic (VIP)
+    is_vip = False
+    caption = message.caption or ""
+    if "#urgent" in caption.lower() or "#vip" in caption.lower():
+        is_vip = True
+        await vip_queue.put(message)
+        q_type = "⚡ VIP Queue"
     else:
-        # ====================================================
-        #            DEFAULT: ADD TO QUEUE 📥
-        # ====================================================
-        # Agar user kisi mode me nahi hai, to message ko Queue me daalo
-        
-        # Check if Target Channel is set
-        if db.get_setting("target_channel") == "0":
-            await message.reply("⚠️ **Setup Required!**\nPlease set a Target Channel first.", reply_markup=get_main_menu())
-            return
-
-        # Add to Queue
         await msg_queue.put(message)
-        
-        # Confirmation Animation
-        q_size = msg_queue.qsize()
-        await message.reply(
-            f"📥 **Queued!** Position: `{q_size}`\n"
-            f"⚡ Processing in background..."
-        )
+        q_type = "📥 Normal Queue"
+
+    # 4. Calculate Position
+    pos = vip_queue.qsize() if is_vip else msg_queue.qsize()
+
+    # 5. Final Confirmation (Edit the Loading Message)
+    # Buttons add kiye hain taaki user wahin se decide kare
+    await status_msg.edit(
+        f"✅ **Added to {q_type}**\n"
+        f"🔢 Position: `{pos}`\n"
+        f"🚀 Uploading in background...",
+        reply_markup=get_upload_success_kb()
+    )
 
 # ==============================================================================
 #                           MAIN EXECUTOR
 # ==============================================================================
 
 async def main():
-    """
-    Initializes the entire system with style.
-    """
-    # 1. Clear Console & Show Banner
+    """Starts the Enterprise Bot System."""
+    # 1. Clear Console
     os.system('cls' if os.name == 'nt' else 'clear')
-    print("""
-    ██████╗ ██████╗ ████████╗
-    ██╔══██╗██╔═══██╗╚══██╔══╝
-    ██████╔╝██║   ██║   ██║   
-    ██╔══██╗██║   ██║   ██║   
-    ██████╔╝╚██████╔╝   ██║   
-    ╚═════╝  ╚═════╝    ╚═╝   
-    🚀 ENTERPRISE PUBLISHER v5.0
-    """)
     print("----------------------------------------------------------------")
-
-    # 2. Config Validation
-    if API_ID == 0 or not API_HASH or not BOT_TOKEN:
-        logger.critical("❌ CRITICAL: config values missing in .env file!")
-        return
-
-    # 3. Start Client
-    logger.info("📡 Establishing secure connection to Telegram...")
+    print("       🚀 ENTERPRISE PUBLISHER BOT - STARTING SYSTEM 🚀")
+    print("----------------------------------------------------------------")
+    
+    # 2. Start Client
+    logger.info("📡 Connecting to Telegram Servers...")
+    await app.start()
+    
+    # 3. Set Bot Commands (Auto-Menu)
+    commands = [
+        types.BotCommand("start", "🏠 Dashboard"),
+        types.BotCommand("logs", "📜 View Error Logs"),
+        types.BotCommand("restore", "♻️ Restore Backup")
+    ]
+    await app.set_bot_commands(commands)
+    logger.info("✅ Bot Commands Menu Updated.")
+    
+    # 4. Notify Super Admin
+    me = await app.get_me()
+    logger.info(f"✅ Logged in as: @{me.username}")
+    
     try:
-        await app.start()
-        me = await app.get_me()
-        logger.info(f"✅ Authenticated as: @{me.username} (ID: {me.id})")
-    except Exception as e:
-        logger.critical(f"❌ Login Failed: {e}")
-        return
-
-    # 4. Launch Background Tasks
-    logger.info("👷 Initializing Worker Engine...")
-    worker_task = asyncio.create_task(worker_engine())
-
-    logger.info("🛡️ Scheduling Auto-Backup System...")
-    backup_task = asyncio.create_task(auto_backup_task(app))
-
-    # 5. Notify Super Admin (Silent Notification)
-    try:
-        start_msg = (
-            f"🚀 **SYSTEM REBOOTED**\n"
+        await app.send_message(
+            SUPER_ADMIN_ID, 
+            f"🚀 **Bot Restarted Successfully!**\n"
             f"📅 `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n"
-            f"ℹ️ System is online and processing."
+            f"ℹ️ Send /start to open control panel."
         )
-        await app.send_message(SUPER_ADMIN_ID, start_msg)
     except:
-        logger.warning("⚠️ Could not DM Super Admin (Chat not initiated?)")
+        logger.warning("⚠️ Could not DM Super Admin.")
 
-    # 6. Keep System Alive
-    logger.info("🟢 SYSTEM OPERATIONAL. WAITING FOR INPUTS.")
+    # 5. Start Background Workers
+    worker_task = asyncio.create_task(worker_engine())
+    backup_task = asyncio.create_task(auto_backup_task(app))
+    
+    # 6. Keep Alive
+    logger.info("🟢 SYSTEM ONLINE. WAITING FOR COMMANDS.")
     await idle()
     
-    # 7. Graceful Shutdown
-    logger.info("🛑 Shutting down services...")
+    # 7. Shutdown
     worker_task.cancel()
     backup_task.cancel()
     await app.stop()
-    print("👋 Goodbye!")
 
 if __name__ == "__main__":
     try:
-        # --- RENDER WEB SERVER HOOK ---
-        # Ye imported 'keep_alive' function Flask server chalayega
-        # Taaki Render bot ko sleep mode me na daale.
+        # Keep Render Alive (Web Server)
         keep_alive()  
-        print("🌍 Web Server Port 8080 Active!")
         
-        # Start Async Loop
         loop = asyncio.get_event_loop()
         loop.run_until_complete(main())
-        
     except KeyboardInterrupt:
-        print("\n🛑 Force Stopped by User")
+        print("\n🛑 Stopped by User")
     except Exception as e:
-        logger.critical(f"❌ Fatal Crash: {e}")
+        logger.critical(f"❌ Fatal Error: {e}")
         traceback.print_exc()
+
+        

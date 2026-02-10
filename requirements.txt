@@ -1,4 +1,6 @@
 pyrogram
 tgcrypto
-flask
 python-dotenv
+flask
+requests
+pysqlite3-binary
