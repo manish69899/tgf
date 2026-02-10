@@ -46,7 +46,8 @@ from pyrogram.types import (
     CallbackQuery,
     InputMediaPhoto,
     InputMediaVideo,
-    InputMediaDocument
+    InputMediaDocument,
+    BotCommand  # <--- YE ADD KIYA HAI
 )
 from pyrogram.errors import (
     FloodWait, 
@@ -1556,10 +1557,11 @@ async def main():
     await app.start()
     
     # 3. Set Bot Commands (Auto-Menu)
+    # 3. Set Bot Commands (Auto-Menu)
     commands = [
-        types.BotCommand("start", "🏠 Dashboard"),
-        types.BotCommand("logs", "📜 View Error Logs"),
-        types.BotCommand("restore", "♻️ Restore Backup")
+        BotCommand("start", "🏠 Dashboard"),
+        BotCommand("logs", "📜 View Error Logs"),
+        BotCommand("restore", "♻️ Restore Backup")
     ]
     await app.set_bot_commands(commands)
     logger.info("✅ Bot Commands Menu Updated.")
